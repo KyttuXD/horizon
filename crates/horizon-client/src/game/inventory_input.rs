@@ -331,7 +331,10 @@ impl Game<'_> {
         )
     }
     /// The open container screen's window: its place and size.
-    pub(super) fn container_image(&self, batch: &HudBatch) -> horizon_client::container_screen::Image {
+    pub(super) fn container_image(
+        &self,
+        batch: &HudBatch,
+    ) -> horizon_client::container_screen::Image {
         let (ox, oy) = self.inventory_origin(batch);
         let (shift, width, height) = if self.screen == Screen::Creative {
             (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)

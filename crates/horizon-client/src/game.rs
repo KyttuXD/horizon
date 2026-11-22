@@ -1351,6 +1351,8 @@ struct Game<'a> {
     cooldowns: horizon_client::cooldowns::Cooldowns,
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
+    /// Whether the current mob damage command names a shulker bullet as its projectile source.
+    command_damage_by_shulker_bullet: bool,
     native_command_filter: bool,
     titles: titles::Titles,
     /// `Hud.toolHighlightTimer`: the selected item name.
@@ -1651,6 +1653,7 @@ struct Game<'a> {
     /// `screenshot-sequence` while it runs.
     screenshot_sequence: Option<screenshot_sequence::Sequence>,
     export: Option<export::Session>,
+    native_export: native_export::NativeExport,
     visual_offset: i64,
     /// `render-capture DIR`: replied once the renderer wrote the scene.
     pending_render_capture: Option<std::sync::mpsc::Sender<String>>,
@@ -10741,6 +10744,7 @@ impl<'a> Game<'a> {
             shield_cooldown: 0,
             cooldowns: Default::default(),
             command_source: None,
+            command_damage_by_shulker_bullet: false,
             native_command_filter: false,
             titles: Default::default(),
             tool_highlight: Default::default(),
@@ -10917,6 +10921,7 @@ impl<'a> Game<'a> {
             pending_screenshot: None,
             screenshot_sequence: None,
             export: None,
+            native_export: native_export::NativeExport::default(),
             visual_offset: 0,
             pending_render_capture: None,
             pending_bench: None,

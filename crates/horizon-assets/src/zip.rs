@@ -395,6 +395,17 @@ fn find_end(data: &[u8]) -> Option<usize> {
     })
 }
 
+/// The total entry count of the Zip64 end record that `end`'s locator points at, if that record is there.
+fn zip64_total_entries(data: &[u8], end: usize) -> Option<u64> {
+    let at = u64::from_le_bytes(data.get(end - 12..end - 4)?.try_into().ok()?) as usize;
+    if data.get(at..at + 4)? != [0x50, 0x4b, 0x06, 0x06] {
+        return None;
+    }
+    Some(u64::from_le_bytes(
+        data.get(at + 32..at + 40)?.try_into().ok()?,
+    ))
+}
+
 /// Java's `ZipFile` ignores the END record's disk numbers and file counts,
 /// reading the central directory from `cenpos` to `cenpos + cenlen` whatever
 /// they say; the `zip` crate insists the record agrees with the directory.
@@ -406,6 +417,18 @@ fn find_end(data: &[u8]) -> Option<usize> {
 fn normalize_end(data: &mut [u8]) -> bool {
     let Some(end) = find_end(data) else {
         return false;
+    };
+    // A Zip64 archive (more than 65535 entries, as CraftEngine's packs are) has its Zip64 record and
+    // locator between the directory and the END record, and its END length leaves them out, so the recount
+    // below starts inside the directory. Its Zip64 record holds the real counts, read here before any recount
+    // (entry comments are free bytes that can fake a directory header, so the recount can't be trusted alone).
+    let zip64_total = if end >= 20 && data[end - 20..end - 16] == [0x50, 0x4b, 0x06, 0x07] {
+        match zip64_total_entries(data, end) {
+            Some(total) => Some(total),
+            None => return false,
+        }
+    } else {
+        None
     };
     // The directory's real position and length, as Java derives them; the
     // recorded offset is relative to the archive's start.
@@ -420,11 +443,9 @@ fn normalize_end(data: &mut [u8]) -> bool {
             + u16_at(data, p + 30) as usize
             + u16_at(data, p + 32) as usize;
     }
-    // A Zip64 archive (more than 65535 entries, as CraftEngine's packs are) has its Zip64 record and
-    // locator between the directory and the END record, and its END length leaves them out: `cenpos` then
-    // starts inside the directory, the recount finds nothing, and writing that over the END record would
-    // make the archive look empty. Its Zip64 record holds the real counts: leave the record as it is.
-    if count == 0 && end >= 20 && data[end - 20..end - 16] == [0x50, 0x4b, 0x06, 0x07] {
+    // A recount that finds no more entries than the Zip64 record counts leaves the record as it is; one that
+    // finds more is the view that lists hidden entries, as before.
+    if zip64_total.is_some_and(|total| u64::from(count) <= total) {
         return false;
     }
     let disk = u16_at(data, end + 4);
@@ -599,6 +620,46 @@ mod tests {
         assert!(Zip::open(&path).unwrap().contains("hidden.txt"));
         assert!(Zip::open_exact(&path).is_err());
         let _ = fs::remove_file(&path);
+    }
+    /// A Zip64 archive whose misaligned recount would find an entry (a fake directory header planted in a
+    /// long entry comment, at `END - cenlen`) still opens with all its entries: its counts are not rewritten.
+    #[test]
+    fn a_zip64_archive_is_not_rewritten_by_a_faked_directory_header() {
+        use std::io::Write as _;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        // A long entry comment, where the planted header sits: comments are free bytes no reader parses.
+        let commented = zip::write::FullFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .with_file_comment("c".repeat(200));
+        writer.start_file("pack.mcmeta", commented).unwrap();
+        writer.write_all(b"{\"pack\":{}}").unwrap();
+        for i in 0..65_537 {
+            writer
+                .start_file(format!("assets/ruby/{i}.json"), options)
+                .unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let end = bytes.len() - END_HEADER;
+        let record = end - 76;
+        let size = u64::from_le_bytes(bytes[record + 40..record + 48].try_into().unwrap()) as usize;
+        let offset =
+            u64::from_le_bytes(bytes[record + 48..record + 56].try_into().unwrap()) as usize;
+        // As Java writes the END record: the directory's real size and offset, counts all ones.
+        bytes[end + 12..end + 16].copy_from_slice(&(size as u32).to_le_bytes());
+        bytes[end + 16..end + 20].copy_from_slice(&(offset as u32).to_le_bytes());
+        // `END - cenlen`, where the misaligned recount starts: a fake header there, with no fields after it.
+        let planted = end - size;
+        assert!(
+            planted > offset + 57 && planted + 46 < offset + 57 + 200,
+            "planted in the comment"
+        );
+        bytes[planted..planted + 46].fill(0);
+        bytes[planted..planted + 4].copy_from_slice(&[0x50, 0x4b, 0x01, 0x02]);
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert_eq!(zip.names().count(), 65_538);
+        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
     }
     #[test]
     fn a_file_is_opened_with_equal_nonzero_disk_numbers() {

@@ -1,0 +1,47 @@
+name: try mac build
+# Fork-only: builds the game for Apple silicon and Intel Macs on GitHub's hosted runners, to try a branch by hand.
+# Not part of any pull request.
+on:
+  push:
+    branches: [try/mac-build]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: macos-arm64, os: macos-15, target: aarch64-apple-darwin}
+          - {name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          targets: ${{ matrix.target }}
+      - name: Build the game
+        run: cargo build --profile fast --locked --target ${{ matrix.target }} -p horizon-game --bin horizon-client
+      - name: Name it as players know it, sign it ad hoc and pack it
+        run: |
+          set -euo pipefail
+          out="target/${{ matrix.target }}/fast"
+          cp "$out/horizon-client" dist-client
+          codesign --force -s - dist-client
+          mkdir -p dist && cp dist-client dist/horizon-client
+          lipo -archs dist/horizon-client
+          (cd dist && zip -q ../horizon-client-${{ matrix.name }}.zip horizon-client)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-client-${{ matrix.name }}
+          path: horizon-client-${{ matrix.name }}.zip
+          retention-days: 7
+          if-no-files-found: error

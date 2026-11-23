@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 180
     env:
       RUSTC_WRAPPER: ''
+      # macOS 12 (Monterey) and later: the binary must start on the Monterey Intel Mac.
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -38,6 +40,10 @@ jobs:
           codesign --force -s - dist-client
           mkdir -p dist && cp dist-client dist/horizon-client
           lipo -archs dist/horizon-client
+          # The minimum macOS the binary declares: it must be 12.0, or Monterey refuses to start it.
+          minos=$(otool -l dist/horizon-client | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')
+          echo "minos: $minos"
+          [[ "$minos" == "12.0" ]] || { echo "::error::minos is $minos, expected 12.0"; exit 1; }
           (cd dist && zip -q ../horizon-client-${{ matrix.name }}.zip horizon-client)
       - uses: actions/upload-artifact@v4
         with:
